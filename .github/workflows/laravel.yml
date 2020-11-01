@@ -1,0 +1,89 @@
+name: Laravel
+
+on:
+  push:
+    branches: 
+      - master
+      - staging
+      - develop
+
+jobs:
+  deploy:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    #- name: Cache dependencies
+    #  uses: actions/cache@v1
+    #  with:
+    #    path: ~/.composer/cache/files
+    #    key: dependencies-composer-${{ hashFiles('**/composer.json') }}
+
+    - name: Install Dependencies
+      run: |
+        composer global require hirak/prestissimo
+        composer global require laravel/envoy
+        cd src && composer install --optimize-autoloader --no-interaction --prefer-dist --ignore-platform-reqs --no-scripts
+
+    - name: Setup .env
+      env: 
+        DOT_ENV_DEV: ${{ secrets.DOT_ENV_DEV }}
+        DOT_ENV_HMG: ${{ secrets.DOT_ENV_HMG }}
+        DOT_ENV_PROD: ${{ secrets.DOT_ENV_PROD }}
+      run: |
+        if [ $GITHUB_REF == 'refs/heads/develop' ]; then
+          echo "$DOT_ENV_DEV" > src/.env
+        fi
+
+        if [ $GITHUB_REF == 'refs/heads/staging' ]; then
+          echo "$DOT_ENV_HMG" > src/.env
+        fi
+
+        if [ $GITHUB_REF == 'refs/heads/master' ]; then
+          echo "$DOT_ENV_PROD" > src/.env
+        fi
+
+    - name: "Prepare SSH Key"
+      env:
+        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+      run: |
+        eval $(ssh-agent -s)
+        mkdir -p ~/.ssh
+        echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub
+        echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+    - name: Deploy To The Server (Envoy)
+      env:
+        DEPLOY_PATH_DEV: ${{ secrets.DEPLOY_PATH_DEV }}
+        DEPLOY_CURRENT_PATH_DEV: ${{ secrets.DEPLOY_CURRENT_PATH_DEV }}
+
+        DEPLOY_PATH_HMG: ${{ secrets.DEPLOY_PATH_HMG }}
+        DEPLOY_CURRENT_PATH_HMG: ${{ secrets.DEPLOY_CURRENT_PATH_HMG }}
+        
+        DEPLOY_PATH_PROD: ${{ secrets.DEPLOY_PATH_PROD }}
+        DEPLOY_CURRENT_PATH_PROD: ${{ secrets.DEPLOY_CURRENT_PATH_PROD }}
+
+        DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      run: |
+        if [ $GITHUB_REF == 'refs/heads/develop' ]; then
+          export DEPLOY_PATH=$DEPLOY_PATH_DEV
+          export DEPLOY_CURRENT_PATH=$DEPLOY_CURRENT_PATH_DEV
+        fi
+
+        if [ $GITHUB_REF == 'refs/heads/staging' ]; then
+          export DEPLOY_PATH=$DEPLOY_PATH_HMG
+          export DEPLOY_CURRENT_PATH=$DEPLOY_CURRENT_PATH_HMG
+        fi
+
+        if [ $GITHUB_REF == 'refs/heads/master' ]; then
+          export DEPLOY_PATH=$DEPLOY_PATH_PROD
+          export DEPLOY_CURRENT_PATH=$DEPLOY_CURRENT_PATH_PROD
+        fi
+
+        ~/.composer/vendor/bin/envoy run deploy --host=$DEPLOY_HOST --user=$DEPLOY_USER --deploy_path=$DEPLOY_PATH --build=$GITHUB_ACTION --commit=$GITHUB_RUN_NUMBER --branch=$GITHUB_REF --php=php --local_dir="$GITHUB_WORKSPACE/src" --current_path=$DEPLOY_CURRENT_PATH
